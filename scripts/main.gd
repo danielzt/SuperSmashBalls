@@ -1666,14 +1666,14 @@ func _draw_mana_bars() -> void:
 		Art.rrect(c, Rect2(bx, by, bw, 20), 10.0, Color(0, 0, 0, 0), Color(1, 1, 1, 0.5), 1.5)
 		# Especial único (botão Y): barra de recarga
 		var uy := by - 20.0
-		var ready: bool = f.ult_cd <= 0.0
-		var ucol := Color(1.0, 0.85, 0.2) if ready else Color(0.6, 0.55, 0.3)
+		var ready: bool = f.ult_cd <= 0.0 or f.power_orb
+		var ucol := Color(0.35, 0.75, 1.0) if f.power_orb else (Color(1.0, 0.85, 0.2) if ready else Color(0.6, 0.55, 0.3))
 		Art.rrect(c, Rect2(bx, uy, bw, 14), 7.0, Color(0, 0, 0, 0.55))
-		var uw: float = bw * (1.0 - f.ult_cd / maxf(f.ult_max, 0.1))
+		var uw: float = bw if f.power_orb else bw * (1.0 - f.ult_cd / maxf(f.ult_max, 0.1))
 		if uw > 2.0:
 			Art.rrect(c, Rect2(bx, uy, uw, 14), 7.0, ucol)
 		Art.rrect(c, Rect2(bx, uy, bw, 14), 7.0, Color(0, 0, 0, 0), Color(1, 1, 1, 0.5), 1.5)
-		var utxt := "Y  PRONTO!" if ready else "Y  %.1fs" % f.ult_cd
+		var utxt := "Y  SUPREMO!" if f.power_orb else ("Y  PRONTO!" if ready else "Y  %.1fs" % f.ult_cd)
 		c.draw_string_outline(Art.font(), Vector2(bx, uy + 12), utxt, HORIZONTAL_ALIGNMENT_CENTER, bw, 12, 3, Color(0.04, 0.07, 0.14, 0.9))
 		c.draw_string(Art.font(), Vector2(bx, uy + 12), utxt, HORIZONTAL_ALIGNMENT_CENTER, bw, 12, Color.WHITE)
 		var txt := "MANA  %d / %d" % [int(f.mana), int(f.max_mana)]

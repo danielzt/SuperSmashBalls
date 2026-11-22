@@ -106,7 +106,7 @@ func update(delta: float) -> void:
 		think_t = float(p["interval"]) * randf_range(0.8, 1.25)
 		_think()
 		var ut: Node = f._nearest_enemy()
-		if ut != null and f.ult_cd <= 0.0 and f.cur_move.is_empty() and f.hitstun <= 0.0 \
+		if ut != null and (f.ult_cd <= 0.0 or f.power_orb) and f.cur_move.is_empty() and f.hitstun <= 0.0 \
 				and f.global_position.distance_to(ut.global_position) < 340.0 \
 				and randf() < 0.12 + 0.45 * float(p["t"]):
 			just["ult"] = true

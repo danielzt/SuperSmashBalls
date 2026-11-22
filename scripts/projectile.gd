@@ -154,6 +154,20 @@ func _draw() -> void:
 			Art.arc(self, Vector2.ZERO, r * (1.0 + 0.1 * pulse2), 0.0, TAU, 24, col, 4.0, true)
 			Art.arc(self, Vector2.ZERO, r * 0.55, age * 2.0, age * 2.0 + PI * 1.4, 12, Color(col, 0.7), 3.0, true)
 			draw_line(Vector2(-r, 0), Vector2(r, 0), Color(col, 0.6), 2.0, true)
+		_ when bool(data.get("super", false)):
+			# onda de energia azul do golpe supremo
+			var dir2 := Vector2(signf(vel.x) if absf(vel.x) > 1.0 else 1.0, 0.0)
+			for i in range(7, 0, -1):   # rastro
+				var a2 := 0.16 * (1.0 - i / 8.0)
+				Art.circ(self, -dir2 * r * 0.55 * i, r * (1.0 - i * 0.09), Color(0.2, 0.5, 1.0, a2 + 0.05))
+			Art.circ(self, Vector2.ZERO, r * 1.35, Color(0.15, 0.4, 1.0, 0.18))
+			Art.circ(self, Vector2.ZERO, r * 1.05, Color(0.2, 0.5, 1.0, 0.75))
+			Art.circ(self, Vector2.ZERO, r * 0.72, Color(0.55, 0.82, 1.0, 0.9))
+			Art.circ(self, Vector2.ZERO, r * 0.4, Color(0.97, 1.0, 1.0))
+			Art.arc(self, dir2 * r * 0.2, r * 1.15, -PI * 0.5 - 0.9 * dir2.x, -PI * 0.5 + 0.9 * dir2.x + PI * (1.0 - dir2.x) * 0.0, 16, Color(0.9, 0.98, 1.0, 0.9), 4.0, true)
+			for q in 8:
+				var an := age * 14.0 + q * TAU / 8.0
+				Art.sparkle(self, Vector2(cos(an), sin(an)) * r * 1.25, 7.0, Color(0.85, 0.97, 1.0), an)
 		_ when bool(data.get("spiky", false)):
 			for k in 10:
 				var a := k * TAU / 10.0 + age * 9.0

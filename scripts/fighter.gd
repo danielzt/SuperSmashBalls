@@ -215,6 +215,7 @@ var kos := 0                # Caça aos KOs: pontos
 var last_attacker: Node = null
 var last_attacker_t := 99.0
 var held_item := ""        # item agarrável na mão (items.gd)
+var power_orb := false     # Orbe de Poder usado: aura + próximo Y é o golpe supremo
 var atk_block := false     # após pegar/usar item, segurar ataque não golpeia
 
 
@@ -381,6 +382,7 @@ func reset_state() -> void:
 	buff_spd_t = 0.0
 	morph_t = 0.0
 	held_item = ""
+	power_orb = false
 	pin_t = 0.0
 	shield_hp = 100.0
 	mana = max_mana
@@ -509,8 +511,8 @@ func _physics_process(delta: float) -> void:
 			atk_block = true
 		elif _just("attack") or (_held("attack") and not atk_block):
 			_begin_slot(_pick_attack_slot(on_floor, dir, want_up, want_down))
-		elif _just("ult") and ult_cd <= 0.0:
-			_begin_slot("ult")
+		elif _just("ult") and (ult_cd <= 0.0 or power_orb):
+			_begin_slot("super" if power_orb else "ult")
 		elif _just("special"):
 			_begin_slot(_pick_special_slot(dir, want_up, want_down))
 		elif not shielding and _just("jump") and jumps_left > 0 and root_t <= 0.0:
@@ -644,12 +646,12 @@ func _pick_special_slot(dir: float, up: bool, down: bool) -> String:
 
 
 func _begin_slot(slot: String) -> void:
-	var m := _resolve(slot)
+	var m := ItemsScript.super_move() if slot == "super" else _resolve(slot)
 	if push_only:
 		m = Chars._m("Empurrão", 0.28, [Chars._h(0.05, 0.10, 34, 0, 76, 58, 1.5, 300, 3.2, 20)])
 	if m.is_empty():
 		return
-	var cost := 0.0 if push_only else cost_of(slot)
+	var cost := 0.0 if (push_only or slot == "super") else cost_of(slot)
 	if mana < cost:
 		no_mana_t = 0.5
 		if no_mana_cd <= 0.0:
@@ -666,6 +668,9 @@ func _begin_slot(slot: String) -> void:
 	if slot == "ult":
 		ult_max = float(m.get("cd", 8.0))
 		ult_cd = ult_max
+	if slot == "super":
+		power_orb = false
+		fx.append({"pos": global_position, "r": 260.0, "t": 0.0, "max": 0.7, "col": Color("8fdcff")})
 	_start(m, slot)
 	if slot == "dash":
 		Sfx.play("dash", 0.7)
@@ -677,7 +682,7 @@ func _start(m: Dictionary, slot: String) -> void:
 	cur_move = m
 	cur_slot = slot
 	attack_t = 0.0
-	_express("ult" if slot == "ult" else "attack", 0.6)
+	_express("ult" if slot in ["ult", "super"] else "attack", 0.6)
 	fired.clear()
 	for i in (m["steps"] as Array).size():
 		fired.append(false)
@@ -685,9 +690,9 @@ func _start(m: Dictionary, slot: String) -> void:
 	hit_connected = false
 	charge_t = 0.0
 	charge_done = false
-	attack_btn = "special" if slot.begins_with("b_") else ("ult" if slot == "ult" else "attack")
+	attack_btn = "special" if slot.begins_with("b_") else ("ult" if slot in ["ult", "super"] else "attack")
 	# som do golpe saindo (o impacto tem som próprio em take_hit)
-	if slot == "ult":
+	if slot == "ult" or slot == "super":
 		Sfx.play("ult")
 	elif slot.begins_with("b_"):
 		Sfx.play("especial", 0.55)
@@ -1406,7 +1411,11 @@ func _draw() -> void:
 		if k > 0.02:
 			Art.ellipse(self, Vector2(0.0, sy - global_position.y + 1.0), body.x * (0.35 + 0.35 * k), body.x * 0.1 * (0.5 + 0.5 * k),
 				Color(0, 0, 0, 0.32 * k))
-
+	if power_orb:
+		_draw_power_aura()
+	elif cur_slot == "super" and not cur_move.is_empty():
+		_draw_power_aura(1.0 + 0.9 * clampf(attack_t / 0.4, 0.0, 1.0))
+		_draw_power_aura()
 	if held_item != "":
 		var hp := Vector2(0.0, -body.y / 2.0 - 24.0 + sin(anim_t * 5.0) * 2.0)
 		draw_set_transform(hp, 0.0, Vector2(0.75, 0.75))
@@ -1575,6 +1584,9 @@ func _draw_attack() -> void:
 			continue
 		var p := clampf((attack_t - st) / ln, 0.0, 1.0)
 		var fade := 1.0 - pow(p, 2.5)
+		if cur_slot == "super" and s["type"] == "hit":
+			_draw_super_burst(c, size, p, fade)
+			continue
 		if s["type"] == "grab":
 			Art.rrect(self, r, rad, Color(1, 0.85, 0.35, 0.18 * fade), Color(1, 0.9, 0.5, 0.7 * fade), 2.0)
 			Art.sparkle(self, c, 8.0 + 6.0 * sin(anim_t * 20.0), Color(1, 0.95, 0.6, fade), anim_t * 6.0)
@@ -1722,3 +1734,60 @@ func _atk_shape() -> Vector3:
 
 func _atk_lean() -> float:
 	return _atk_shape().x * 0.5
+
+
+## Aura de poder (Orbe de Poder): coluna de chamas azuis, brilho pulsante, raios subindo e faíscas.
+## k = intensidade (1 normal; maior durante a carga do golpe supremo).
+func _draw_power_aura(k := 1.0) -> void:
+	var t := anim_t
+	var u := maxf(body.y, 30.0)
+	var pulse := 0.5 + 0.5 * sin(t * 9.0)
+	var foot := body.y * 0.5
+	# brilho de fundo (coluna de luz)
+	Art.circ(self, Vector2(0, -u * 0.3), u * (1.9 + 0.15 * pulse) * k, Color(0.15, 0.4, 1.0, 0.14))
+	Art.circ(self, Vector2(0, -u * 0.2), u * (1.3 + 0.1 * pulse) * k, Color(0.35, 0.7, 1.0, 0.2))
+	Art.ellipse(self, Vector2(0, foot), u * 1.4 * k, u * 0.22, Color(0.3, 0.65, 1.0, 0.35 + 0.2 * pulse))
+	# línguas de fogo azul (3 camadas: azul profundo, azul claro, núcleo branco)
+	var n := 11
+	for i in n:
+		var side := (float(i) / (n - 1) - 0.5) * 2.0   # -1..1
+		var ph := t * 7.0 + i * 2.3
+		var bx := side * u * 0.75 * k
+		var by := foot - absf(side) * u * 0.12
+		var fh := u * (1.5 + 0.5 * sin(ph)) * (1.15 - 0.45 * absf(side)) * k
+		var w := u * (0.34 - 0.12 * absf(side)) * k
+		var sway := sin(ph * 0.7) * u * 0.18
+		var tip := Vector2(bx + sway, by - fh)
+		var mid := Vector2(bx + sway * 0.4, by - fh * 0.5)
+		Art.poly(self, PackedVector2Array([Vector2(bx - w, by), mid + Vector2(-w * 0.8, 0), tip, mid + Vector2(w * 0.8, 0), Vector2(bx + w, by)]),
+			Color(0.1, 0.32, 1.0, 0.62))
+		Art.poly(self, PackedVector2Array([Vector2(bx - w * 0.6, by), mid + Vector2(-w * 0.4, 0), tip * 0.5 + Vector2(bx + sway, by) * 0.5 + Vector2(0, -fh * 0.28), mid + Vector2(w * 0.4, 0), Vector2(bx + w * 0.6, by)]),
+			Color(0.45, 0.78, 1.0, 0.7))
+		Art.poly(self, PackedVector2Array([Vector2(bx - w * 0.28, by), Vector2(bx + sway * 0.3, by - fh * 0.42), Vector2(bx + w * 0.28, by)]),
+			Color(0.9, 0.98, 1.0, 0.85))
+	# anéis de energia subindo
+	for r in 3:
+		var f := fmod(t * 1.3 + r / 3.0, 1.0)
+		Art.ellipse(self, Vector2(0, foot - f * u * 2.0), u * (1.2 - 0.5 * f) * k, u * 0.2 * (1.0 - f), Color(0.6, 0.9, 1.0, 0.7 * (1.0 - f)))
+	Art.arc(self, Vector2.ZERO, u * 0.72, 0.0, TAU, 32, Color(0.75, 0.94, 1.0, 0.55 + 0.4 * pulse), 3.0, true)
+	for q in 5:
+		var a := t * 3.0 + q * TAU / 5.0
+		Art.sparkle(self, Vector2(cos(a) * u * 0.9, foot - fmod(t * 60.0 + q * 37.0, u * 2.2)), 6.0, Color(0.75, 0.96, 1.0), a)
+
+
+## Explosão azul do golpe supremo (centrada na caixa do golpe).
+func _draw_super_burst(c: Vector2, size: Vector2, p: float, fade: float) -> void:
+	var e := 1.0 - pow(1.0 - p, 3.0)
+	var rr := size.x * 0.5 * (0.25 + 0.75 * e)
+	Art.circ(self, c, rr, Color(0.1, 0.35, 1.0, 0.35 * fade))
+	Art.circ(self, c, rr * 0.7, Color(0.4, 0.75, 1.0, 0.45 * fade))
+	Art.circ(self, c, rr * 0.38, Color(0.95, 0.99, 1.0, 0.9 * fade))
+	Art.arc(self, c, rr, 0.0, TAU, 48, Color(0.8, 0.95, 1.0, fade), 6.0, true)
+	Art.arc(self, c, rr * 0.72, 0.0, TAU, 40, Color(0.3, 0.6, 1.0, 0.8 * fade), 4.0, true)
+	for i in 14:   # raios de luz
+		var an := i * TAU / 14.0 + 0.3
+		var d := Vector2(cos(an), sin(an))
+		var len := rr * (1.1 + 0.5 * float(i % 3) / 2.0)
+		var w := 7.0 * (1.0 - p)
+		Art.poly(self, PackedVector2Array([c + d * rr * 0.3 + d.orthogonal() * w, c + d * len, c + d * rr * 0.3 - d.orthogonal() * w]),
+			Color(0.8, 0.95, 1.0, 0.8 * fade))
