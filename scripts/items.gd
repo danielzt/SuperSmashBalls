@@ -4,6 +4,7 @@ extends Node2D
 
 const Art := preload("res://scripts/art.gd")
 const ProjScript := preload("res://scripts/projectile.gd")
+const Chars := preload("res://scripts/characters.gd")
 
 const MAX_ITEMS := 2
 const LIFE := 14.0
@@ -20,11 +21,13 @@ const TYPES := {
 	"power": ["Punho de força", Color("ff6b35"), 2.0],
 	"mana": ["Cristal de mana", Color("4d7cff"), 2.0],
 	"bubble": ["Bolha protetora", Color("7af0c8"), 1.5],
+	"orb": ["Orbe de Poder", Color("3ab4ff"), 0.0],   # raro: só surge por _orb_chance()
 }
 
 var running := false
 var items: Array = []   # {id, x, y, vy, t, age}
 var timer := 5.0
+var elapsed := 0.0   # tempo de luta: quanto mais demora, mais chance do Orbe de Poder
 var rate := 1.0   # frequência de itens (modo Frenético > 1)
 var feed_cb: Callable = Callable()   # opcional: texto de aviso (f, texto)
 
@@ -45,6 +48,7 @@ func _someone_near(c: Vector2) -> bool:
 func clear() -> void:
 	items.clear()
 	timer = randf_range(4.0, 8.0)
+	elapsed = 0.0
 	queue_redraw()
 
 
@@ -53,6 +57,7 @@ func _physics_process(delta: float) -> void:
 		if not items.is_empty():
 			clear()
 		return
+	elapsed += delta
 	timer -= delta * rate
 	if timer <= 0.0:
 		timer = randf_range(5.0, 11.0)
@@ -61,7 +66,7 @@ func _physics_process(delta: float) -> void:
 			_spawn()
 	for it in items.duplicate():
 		it["age"] += delta
-		if it["age"] > LIFE:
+		if it["age"] > _life(String(it["id"])):
 			items.erase(it)
 			Sfx.play("i_some", 0.6)
 			continue
@@ -106,6 +111,11 @@ func _spawn() -> void:
 		if pick <= 0.0:
 			chosen = s
 			break
+	# Orbe de Poder: muito raro no início, cada vez mais provável quanto mais a luta demora
+	if not _has_orb() and randf() < _orb_chance():
+		items.append({"id": "orb", "x": chosen[0], "y": float(chosen[1]) - 140.0, "vy": 0.0, "age": 0.0})
+		Sfx.play("i_aparece", 0.9)
+		return
 	# sorteia o tipo ponderado
 	var wt := 0.0
 	for k in TYPES:
@@ -165,6 +175,12 @@ func use(id: String, f: Node) -> void:
 			f.barrier_t = 8.0
 			f.barrier_hp = 40.0
 			Sfx.play("i_bolha")
+		"orb":
+			f.power_orb = true
+			f.fx.append({"pos": f.global_position, "r": 150.0, "t": 0.0, "max": 0.6, "col": Color("8fdcff")})
+			Sfx.play("ult")
+			if feed_cb.is_valid():
+				feed_cb.call(f, "ganhou AURA DE PODER - aperte Y!")
 	if feed_cb.is_valid():
 		feed_cb.call(f, "usou " + String(TYPES[id][0]))
 
@@ -190,7 +206,7 @@ func _draw() -> void:
 		var id: String = it["id"]
 		var col: Color = TYPES[id][1]
 		var age: float = it["age"]
-		var left: float = LIFE - age
+		var left: float = _life(id) - age
 		if left < 3.0 and int(age * 8.0) % 2 == 0:
 			continue   # pisca antes de sumir
 		var bob := sin(age * 4.0) * 3.0
@@ -266,6 +282,23 @@ static func draw_icon(ci: CanvasItem, id: String, c: Vector2, col: Color, age: f
 			Art.circ(ci, c, 17.0, ink)
 			Art.circ(ci, c, 15.5, Color(col, 0.55))
 			Art.circ(ci, c + Vector2(-6, -6), 4.0, Color(1, 1, 1, 0.8))
+		"orb":
+			# orbe de vidro pegando fogo azul
+			Art.circ(ci, c, 30.0 + sin(age * 6.0) * 2.0, Color(0.25, 0.6, 1.0, 0.16))
+			for k in 7:   # línguas de fogo azul subindo ao redor do orbe
+				var ph := age * 7.0 + k * 1.9
+				var bx := (k - 3.0) * 4.6
+				var h := 14.0 + 7.0 * sin(ph) + (3.0 - absf(k - 3.0)) * 3.0
+				var base := c + Vector2(bx, -6.0 + absf(k - 3.0) * 3.0)
+				var tip := base + Vector2(sin(ph * 0.8) * 4.0, -h)
+				Art.poly(ci, PackedVector2Array([base + Vector2(-4.5, 0), tip, base + Vector2(4.5, 0)]), Color(0.2, 0.5, 1.0, 0.85))
+				Art.poly(ci, PackedVector2Array([base + Vector2(-2.4, 0), base + (tip - base) * 0.72, base + Vector2(2.4, 0)]), Color(0.65, 0.9, 1.0, 0.9))
+			Art.circ(ci, c, 14.5, ink)
+			Art.circ(ci, c, 13.0, Color(0.55, 0.82, 1.0, 0.75))                 # vidro
+			Art.circ(ci, c + Vector2(0, 1.5), 8.0 + sin(age * 9.0), Color(0.15, 0.4, 1.0, 0.9))   # chama dentro
+			Art.circ(ci, c + Vector2(0, 2.5), 4.5, Color(0.85, 0.97, 1.0))
+			ci.draw_arc(c, 10.5, PI * 1.05, PI * 1.55, 8, Color(1, 1, 1, 0.9), 2.5, true)   # brilho do vidro
+			Art.circ(ci, c + Vector2(-5.5, -6.0), 2.2, Color(1, 1, 1, 0.95))
 
 
 ## Item no chão ao alcance do lutador (ou -1).
@@ -296,3 +329,31 @@ func pickup(f: Node) -> bool:
 		feed_cb.call(f, "pegou " + String(TYPES[f.held_item][0]))
 	queue_redraw()
 	return true
+
+
+func _life(id: String) -> float:
+	return LIFE * 1.7 if id == "orb" else LIFE
+
+
+func _has_orb() -> bool:
+	for it in items:
+		if it["id"] == "orb":
+			return true
+	for f in get_tree().get_nodes_in_group("fighters"):
+		if f.held_item == "orb" or f.power_orb:
+			return true
+	return false
+
+
+## Chance (por sorteio de item) do orbe: ~1% no começo, ~16% com 2 min de luta, até 35%.
+func _orb_chance() -> float:
+	return clampf(0.01 + elapsed / 240.0 * 0.30, 0.01, 0.35)
+
+
+## Golpe supremo do orbe (botão Y): carga com armadura, explosão enorme e onda de energia que atravessa.
+static func super_move() -> Dictionary:
+	return Chars._m("GOLPE SUPREMO", 1.0, [
+		Chars._s(0.0, "armor", {"len": 0.95}),
+		Chars._h(0.38, 0.16, 30, 0, 420, 250, 30.0, 580, 7.5, 38, {}),
+		Chars._pr(0.42, 40, 0, 1000, 0, 100, 24.0, 520, 6.5, 38, {"pierce": true, "life": 1.1, "super": true}),
+	])
