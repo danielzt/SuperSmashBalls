@@ -256,6 +256,7 @@ func _announce(m: Dictionary, label_suffix := "") -> void:
 
 func _ready() -> void:
 	add_to_group("fighters")
+	process_mode = Node.PROCESS_MODE_PAUSABLE   # para no menu de pausa
 	collision_layer = 2     # camada 2: lutadores
 	collision_mask = 1 | 4  # colide com o chão (1) e plataformas (3)
 	var cs := CollisionShape2D.new()
@@ -290,6 +291,8 @@ func setup_ai(level: int) -> void:
 
 
 var input_locked := false   # partida acabou: sem controle
+var mute_until := 0          # ignora o controle até este quadro (ex.: logo depois de sair da pausa)
+var god_mode := false       # trapaça "jogadores invencíveis": golpes não pegam
 
 ## Controles Trocados: direções do analógico <-> botões da direita (esq=ataque, dir=especial, cima=Y, baixo=pulo).
 const SWAP_MAP := {"left": "attack", "attack": "left", "right": "special", "special": "right",
@@ -301,7 +304,7 @@ func _rm(a: String) -> String:
 
 
 func _held(a: String) -> bool:
-	if input_locked:
+	if input_locked or Engine.get_physics_frames() < mute_until:
 		return false
 	if ai != null:
 		return ai.held.get(a, false)
@@ -309,7 +312,7 @@ func _held(a: String) -> bool:
 
 
 func _just(a: String) -> bool:
-	if input_locked:
+	if input_locked or Engine.get_physics_frames() < mute_until:
 		return false
 	if ai != null:
 		return ai.just.get(a, false)
@@ -317,7 +320,7 @@ func _just(a: String) -> bool:
 
 
 func _axis_x() -> float:
-	if input_locked:
+	if input_locked or Engine.get_physics_frames() < mute_until:
 		return 0.0
 	if ai != null:
 		return (1.0 if ai.held.get("right", false) else 0.0) - (1.0 if ai.held.get("left", false) else 0.0)
@@ -1016,6 +1019,8 @@ func _update_grab(delta: float) -> void:
 
 ## Retorna true se o golpe foi "consumido" (acertou, bloqueou ou foi absorvido).
 func take_hit(d: Dictionary, dir_x: int, attacker: Node = null) -> bool:
+	if god_mode:
+		return false
 	var ub: bool = d.get("ub", false)
 	if invincible > 0.0 or eliminated or respawn_t > 0.0:
 		return false

@@ -23,6 +23,7 @@ var age := 0.0
 
 func _ready() -> void:
 	add_to_group("projectiles")
+	process_mode = Node.PROCESS_MODE_PAUSABLE   # para no menu de pausa
 
 
 func _owner_ok() -> bool:
