@@ -13,6 +13,16 @@ const Stages := preload("res://scripts/stages.gd")
 const Ach := preload("res://scripts/achievements.gd")
 const MAX_PLAYERS := 6
 const COLORS := [Color("e74c3c"), Color("3498db"), Color("2ecc71"), Color("f1c40f"), Color("b46bd6"), Color("ff8a3d")]
+## Extras: frases (Splash Text) sorteadas no título, no lugar de "arena de luta".
+const SPLASHES := [
+	"Arena de luta!", "Agora com 100% mais bolas!", "Não é um jogo de bilhar!", "Redondo, mas perigoso!",
+	"Feito com carinho e _draw()!", "Zero sprites, 100% código!", "Cuidado com a lava!", "Sai da frente, cara!",
+	"Quem cair, perdeu!", "Smash em formato bola!", "Pule duas vezes, viva uma!", "O escudo é seu amigo!",
+	"Tem Orbe de Poder por aí!", "Mana não cai do céu!", "Aperte Y e reze!", "Seus amigos vão te trair!",
+	"A CPU nível 9 não perdoa!", "Quase um clássico!", "Feito em Godot!", "Também funciona no navegador!",
+	"Rolando para a vitória!", "Foi só um empurrãozinho!", "Fora do mapa, fora do jogo!", "39 mapas de pura loucura!",
+	"16 bolas, uma só vencedora!", "Trapaça não vale conquista!", "Ninguém sobrevive ao Caos!", "Treine antes de chorar!",
+	"Só mais uma partida...", "Pause e respire fundo!"]
 const TITLE_OPTS := ["VERSUS", "TREINO", "TUTORIAL BÁSICO", "TUTORIAL AVANÇADO", "CONQUISTAS"]
 const GRID_ORIGIN := Vector2(50, 120)
 const CELL := Vector2(150, 100)
@@ -44,6 +54,20 @@ const MODE_DESC := [
 ]
 const WIND_F := 600.0        # força do mutador Vento
 const WIND_PERIOD := 6.0
+## Trapaças do menu de pausa. toggle = fica ligada até o fim da partida; senão acontece na hora.
+const CHEATS := [
+	{"id": "items", "text": "FAZER APARECER ITENS", "toggle": false},
+	{"id": "dmg999", "text": "999% DE DANO PARA TODOS", "toggle": false},
+	{"id": "dmg0", "text": "ZERAR O DANO DE TODOS", "toggle": false},
+	{"id": "life", "text": "+1 VIDA PARA TODOS", "toggle": false},
+	{"id": "ko_cpu", "text": "NOCAUTEAR AS CPUs", "toggle": false},
+	{"id": "mana", "text": "MANA INFINITA", "toggle": true},
+	{"id": "ult", "text": "Y SEMPRE PRONTO", "toggle": true},
+	{"id": "god", "text": "JOGADORES INVENCÍVEIS", "toggle": true},
+	{"id": "jump", "text": "SUPER PULO", "toggle": true},
+	{"id": "slow", "text": "CÂMERA LENTA", "toggle": true},
+	{"id": "grav", "text": "GRAVIDADE DA LUA", "toggle": true},
+]
 const MUTATORS := [
 	{"id": "lowgrav", "name": "GRAVIDADE BAIXA", "desc": "Tudo flutua"},
 	{"id": "dmg2", "name": "DANO DOBRADO", "desc": "Todo golpe machuca o dobro"},
@@ -94,6 +118,7 @@ var btn_layer: Node2D
 var msg: Label
 var hint: Label
 var anim_t := 0.0
+var splash := ""
 var _draw_acc := 0.0
 var _hud_cache: Array = ["", "", "", "", "", ""]   # evita reescrever Labels (e refazer layout) todo quadro
 var _hud_col: Array = [-1, -1, -1, -1, -1, -1]
@@ -127,6 +152,11 @@ var hunt_t := 90.0
 var banner := ""
 var banner_t := 0.0
 var gb_rect: ColorRect
+var paused := false              # menu de pausa aberto (Start/Options ou Esc durante a luta)
+var pause_sel := 0
+var pause_page := 0               # 0 = menu de pausa, 1 = trapaças
+var cheats: Dictionary = {}        # trapaças ligadas nesta partida (id -> true)
+var cheats_used := false           # usou trapaça: a partida não conta para as conquistas
 var ach_row := 0                   # conquistas: primeira linha visível (alvo da rolagem)
 var ach_scroll := 0.0              # rolagem suavizada, em linhas
 var _ach_prev: Dictionary = {}     # conquistas: foto dos contadores de cada lutador humano
@@ -140,6 +170,8 @@ func _notification(what: int) -> void:
 
 func _ready() -> void:
 	Ach.setup(Stages.count())
+	process_mode = Node.PROCESS_MODE_ALWAYS      # o menu de pausa continua funcionando com o jogo pausado
+	Sfx.process_mode = Node.PROCESS_MODE_ALWAYS  # a música não para na pausa
 	Art.pal = Stages.palette(0)
 	backdrop = BackdropScript.new()
 	add_child(backdrop)
@@ -148,7 +180,10 @@ func _ready() -> void:
 	items = ItemsScript.new()
 	items.feed_cb = _on_move_used
 	add_child(items)
-	add_child(FxScript.new())
+	var fxl := FxScript.new()
+	add_child(fxl)
+	for n in [backdrop, stage, items, fxl]:
+		n.process_mode = Node.PROCESS_MODE_PAUSABLE
 	_build_hud()
 	_go_title()
 
@@ -236,7 +271,19 @@ func _process(delta: float) -> void:
 	for e in feed:
 		e["t"] = float(e["t"]) + delta
 	feed = feed.filter(func(e): return float(e["t"]) < 3.2)
-	if Input.is_action_just_pressed("menu_back") and st != S.TITLE:
+	if st == S.FIGHT:
+		if paused:
+			_pause_menu()
+			btn_layer.queue_redraw()
+			msg.visible = false
+			hint.visible = false
+			for hl in hud_labels:
+				hl.visible = false
+			return
+		if Input.is_action_just_pressed("start") or Input.is_action_just_pressed("menu_back"):
+			_open_pause()
+			return
+	if Input.is_action_just_pressed("menu_back") and st != S.TITLE and st != S.FIGHT:
 		Sfx.play("menu_voltar")
 		_go_title()
 	if st != S.FIGHT and (Inputs.any_just("up") != "" or Inputs.any_just("down") != "" \
@@ -255,6 +302,7 @@ func _process(delta: float) -> void:
 			_stage_select()
 		S.FIGHT:
 			_fight(delta)
+			_cheat_tick()
 			_ach_tick(delta)
 		S.OVER:
 			_over()
@@ -295,6 +343,13 @@ func _confirm_pressed() -> bool:
 
 
 func _go_title() -> void:
+	for hl in hud_labels:
+		hl.visible = true
+	_reset_cheats()
+	msg.visible = true
+	hint.visible = true
+	paused = false
+	get_tree().paused = false
 	Ach.flush()
 	_clear_fighters()
 	rule = "classic"
@@ -304,6 +359,7 @@ func _go_title() -> void:
 	stage.rate = 1.0
 	Art.pal = Stages.palette(0)
 	st = S.TITLE
+	splash = SPLASHES[randi() % SPLASHES.size()]
 	slots.clear()
 	tut = null
 	msg.text = ""
@@ -675,6 +731,7 @@ func _start_match(next_round := false) -> void:
 	if not next_round:
 		rule = RULES[cfg_mode] if mode == "versus" else "classic"
 		wins.clear()
+		_reset_cheats()
 		inf_run = cfg_inf and mode == "versus"
 	var sid := randi() % Stages.count() if stage_sel == 0 else stage_sel - 1
 	if next_round:   # Partida Infinita: cada rodada muda de mapa, de cores e de música
@@ -753,14 +810,14 @@ func _fight(delta: float) -> void:
 			msg.text = tut.title() + "\nPasso concluído!"
 		else:
 			msg.text = tut.title() + "\n" + tut.text()
-		hint.text = "ENTER/START: voltar ao menu" if tut.done else "ENTER/START: pular passo   |   ESC/SELECT: sair"
+		hint.text = "START/OPTIONS ou ESC: pausa (pular passo, configurações, sair)"
 		return
 	msg.add_theme_color_override("font_color", Color.WHITE)
 	if mode == "training":
 		if Input.is_action_just_pressed("start"):
 			_training_reset()
 		var d = fighters[1]
-		msg.text = "TREINO  |  ENTER/START: zerar dano e posições  |  ESC/SELECT: menu\n" \
+		msg.text = "TREINO  |  START/OPTIONS ou ESC: pausa (zerar, configurações, sair)\n" \
 			+ "Último golpe: %.1f%%   Combo: %d hits / %.1f%%" % [d.last_hit_dmg, d.combo_hits, d.combo_dmg]
 		msg.position.y = 12.0
 		msg.add_theme_font_size_override("font_size", 22)
@@ -1175,11 +1232,13 @@ func _buttons() -> Array:
 		S.ACH:
 			b.append({"id": "back", "rect": Rect2(40, 628, 200, 48), "text": "VOLTAR", "hint": "Esc/Select"})
 		S.FIGHT:
-			b.append({"id": "back", "rect": Rect2(1050, 90, 210, 40), "text": "MENU", "hint": "Esc/Select"})
+			if paused:
+				return b
+			b.append({"id": "pause", "rect": Rect2(1050, 90, 210, 40), "text": "PAUSA", "hint": "Start"})
 			if _is_tutorial() and tut != null:
-				b.append({"id": "skip", "rect": Rect2(1050, 136, 210, 40), "text": "FIM" if tut.done else "PULAR PASSO", "hint": "Start"})
+				b.append({"id": "skip", "rect": Rect2(1050, 136, 210, 40), "text": "FIM" if tut.done else "PULAR PASSO", "hint": "mouse"})
 			elif mode == "training":
-				b.append({"id": "reset", "rect": Rect2(1050, 136, 210, 40), "text": "ZERAR", "hint": "Start"})
+				b.append({"id": "reset", "rect": Rect2(1050, 136, 210, 40), "text": "ZERAR", "hint": "mouse"})
 		S.OVER:
 			b.append({"id": "again", "rect": Rect2(400, 400, 480, 60), "text": "ESCOLHER PERSONAGENS", "hint": "Start", "main": true})
 			b.append({"id": "back", "rect": Rect2(400, 480, 480, 60), "text": "MENU", "hint": "Esc/Select"})
@@ -1192,6 +1251,8 @@ func _press(id: String) -> void:
 	elif id != "cfg_ok" and id != "fight_stage":
 		Sfx.play("menu_ok")
 	match id:
+		"pause":
+			_open_pause()
 		"back":
 			_go_title()
 		"cfg_ok":
@@ -1221,6 +1282,10 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		mouse = get_local_mouse_position()
 		hover_cell = _cell_at(mouse) if st == S.SELECT else -1
+		if paused and st == S.FIGHT:
+			for i in _pause_items().size():
+				if _pause_rect(i).has_point(mouse):
+					pause_sel = i
 		match st:
 			S.TITLE:
 				for i in TITLE_OPTS.size():
@@ -1242,6 +1307,9 @@ func _input(event: InputEvent) -> void:
 
 
 func _click(pos: Vector2, btn: int) -> void:
+	if paused and st == S.FIGHT:
+		_pause_click(pos, btn)
+		return
 	if btn == MOUSE_BUTTON_WHEEL_UP or btn == MOUSE_BUTTON_WHEEL_DOWN:
 		if st == S.ACH:
 			ach_row = clampi(ach_row + (-1 if btn == MOUSE_BUTTON_WHEEL_UP else 1), 0, _ach_max_row())
@@ -1303,6 +1371,9 @@ func _click(pos: Vector2, btn: int) -> void:
 
 
 func _draw_buttons() -> void:
+	if paused and st == S.FIGHT:
+		_draw_pause(btn_layer)
+		return
 	var list := _buttons()
 	var foc := _focused_index()
 	for i in list.size():
@@ -1426,6 +1497,8 @@ func _draw_ach_card(i: int, pos: Vector2) -> void:
 
 ## Acompanha os contadores dos humanos a cada quadro (diferenças desde o quadro anterior).
 func _ach_tick(delta: float) -> void:
+	if cheats_used:
+		return   # partida com trapaça não conta para as conquistas
 	if _is_tutorial() or fighters.is_empty():
 		return
 	_ach_acc += delta
@@ -1499,6 +1572,8 @@ func _ach_start() -> void:
 
 
 func _ach_win(w: Node) -> void:
+	if cheats_used:
+		return   # partida com trapaça não conta para as conquistas
 	if mode != "versus" or not _is_human(w):
 		return
 	Ach.add("wins")
@@ -1525,6 +1600,8 @@ func _ach_win(w: Node) -> void:
 
 
 func _ach_match_end() -> void:
+	if cheats_used:
+		return   # partida com trapaça não conta para as conquistas
 	if mode != "versus":
 		return
 	Ach.add("matches")
@@ -1709,7 +1786,15 @@ func _draw_feed() -> void:
 func _draw_title() -> void:
 	_title_word("SUPER", 60, 128.0, 0.0)
 	_title_word("SMASH BALLS", 96, 224.0, 1.3)
-	_tc("arena de luta", 268, 24, Color("dfe8f2"))
+	# Splash Text: amarelo, inclinado e pulsando
+	if splash == "":
+		splash = SPLASHES[randi() % SPLASHES.size()]
+	var ps := 1.0 + 0.06 * sin(anim_t * 5.0)
+	draw_set_transform(Vector2(640.0, 262.0), -0.05, Vector2(ps, ps))
+	var sw := 1100.0
+	draw_string_outline(Art.font(), Vector2(-sw * 0.5, 0), splash, HORIZONTAL_ALIGNMENT_CENTER, sw, 26, 5, Color(0.04, 0.07, 0.14, 0.9))
+	draw_string(Art.font(), Vector2(-sw * 0.5, 0), splash, HORIZONTAL_ALIGNMENT_CENTER, sw, 26, GOLD)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	# mãos gigantes flutuando dos dois lados do título
 	var hc := [Color("e8884a"), Color("5aa9d6"), Color("6cc59a"), Color("e8c04a")]
 	for k in 2:
@@ -2030,3 +2115,281 @@ func _set_poses(winner: Node) -> void:
 			f._express("win", 999.0)
 		elif f.pose == 2:
 			f._express("lose", 999.0)
+
+
+# ---------------------------------------------------------------- pausa
+
+## Itens do menu de pausa (o que aparece depende do modo).
+func _pause_items() -> Array:
+	if pause_page == 1:
+		return _cheat_items()
+	var l: Array = [{"id": "resume", "text": "VOLTAR AO JOGO"},
+		{"id": "music", "text": "MÚSICA"}, {"id": "sfx", "text": "EFEITOS SONOROS"}]
+	if mode == "training":
+		l.append({"id": "reset", "text": "ZERAR DANO E POSIÇÕES"})
+	elif _is_tutorial() and tut != null and not tut.done:
+		l.append({"id": "skip", "text": "PULAR PASSO"})
+	if not _is_tutorial():
+		l.append({"id": "cheats", "text": "TRAPAÇAS"})
+	l.append({"id": "quit", "text": "SAIR DO JOGO"})
+	return l
+
+
+## Página de trapaças: ações (acontecem na hora) e opções que ficam ligadas até o fim da partida.
+func _cheat_items() -> Array:
+	var l: Array = []
+	for c in CHEATS:
+		var txt := String(c["text"])
+		if bool(c["toggle"]):
+			txt += "   [%s]" % ("LIGADO" if cheats.get(c["id"], false) else "desligado")
+		l.append({"id": "c_" + String(c["id"]), "text": txt})
+	l.append({"id": "back_page", "text": "VOLTAR"})
+	return l
+
+
+func _pause_rect(i: int) -> Rect2:
+	var n := _pause_items().size()
+	var stp := 62.0 if pause_page == 0 else 44.0
+	var y0 := 360.0 - n * stp * 0.5 + (40.0 if pause_page == 0 else 30.0)
+	return Rect2(400 if pause_page == 0 else 380, y0 + i * stp, 480 if pause_page == 0 else 520, 52.0 if pause_page == 0 else 38.0)
+
+
+func _open_pause() -> void:
+	pause_page = 0
+	paused = true
+	pause_sel = 0
+	get_tree().paused = true
+	Sfx.play("menu_ok")
+
+
+func _close_pause() -> void:
+	for hl in hud_labels:
+		hl.visible = true
+	msg.visible = true
+	hint.visible = true
+	paused = false
+	get_tree().paused = false
+	# o botão que fechou a pausa não vira golpe/pulo no mesmo instante
+	for f in fighters:
+		f.mute_until = Engine.get_physics_frames() + 3
+
+
+func _pause_menu() -> void:
+	var items_l := _pause_items()
+	pause_sel = clampi(pause_sel, 0, items_l.size() - 1)
+	if pause_page == 1 and Inputs.any_just("special") != "":
+		Sfx.play("menu_voltar")   # B nas trapaças volta para a pausa
+		pause_page = 0
+		pause_sel = _pause_items().size() - 2
+		return
+	if Input.is_action_just_pressed("start") or Input.is_action_just_pressed("menu_back") \
+			or Inputs.any_just("special") != "":
+		Sfx.play("menu_voltar")
+		_close_pause()
+		return
+	if Inputs.any_just("up") != "":
+		pause_sel = (pause_sel + items_l.size() - 1) % items_l.size()
+		Sfx.play("menu_mover")
+	if Inputs.any_just("down") != "":
+		pause_sel = (pause_sel + 1) % items_l.size()
+		Sfx.play("menu_mover")
+	var dl := 0
+	if Inputs.any_just("left") != "":
+		dl = -1
+	elif Inputs.any_just("right") != "":
+		dl = 1
+	if dl != 0:
+		_pause_adjust(String(items_l[pause_sel]["id"]), dl)
+	if Inputs.any_just("attack") != "" or Inputs.any_just("jump") != "":
+		_pause_press(String(items_l[pause_sel]["id"]))
+
+
+func _pause_adjust(id: String, dl: int) -> void:
+	if id == "music":
+		Sfx.set_music_level(Sfx.music_lvl + dl)
+	elif id == "sfx":
+		Sfx.set_sfx_level(Sfx.sfx_lvl + dl)
+		Sfx.play("hit_medio")
+
+
+func _pause_press(id: String) -> void:
+	if id.begins_with("c_"):
+		_cheat(id.substr(2))
+		return
+	if id == "cheats":
+		Sfx.play("menu_ok")
+		pause_page = 1
+		pause_sel = 0
+		return
+	if id == "back_page":
+		Sfx.play("menu_voltar")
+		pause_page = 0
+		pause_sel = _pause_items().size() - 2
+		return
+	match id:
+		"resume":
+			Sfx.play("menu_ok")
+			_close_pause()
+		"music", "sfx":
+			_pause_adjust(id, 1)   # apertar no volume aumenta
+		"reset":
+			Sfx.play("menu_ok")
+			_close_pause()
+			_training_reset()
+		"skip":
+			Sfx.play("menu_ok")
+			_close_pause()
+			tut.skip()
+		"quit":
+			Sfx.play("menu_voltar")
+			_close_pause()
+			_go_title()
+
+
+func _draw_pause(c: CanvasItem) -> void:
+	c.draw_rect(Rect2(0, 0, 1280, 720), Color(0.02, 0.04, 0.1, 0.62))
+	var items_l := _pause_items()
+	var cheat_pg := pause_page == 1
+	var first := _pause_rect(0)
+	var last := _pause_rect(items_l.size() - 1)
+	var head := 100.0 if not cheat_pg else 84.0
+	var panel := Rect2(first.position.x - 30.0, first.position.y - head, first.size.x + 60.0, last.end.y - first.position.y + head + 40.0)
+	Art.rrect(c, panel, 34.0, Color(0.05, 0.09, 0.18, 0.95), Color(GOLD, 0.8) if not cheat_pg else Color("ff6bd5"), 3.0, 12)
+	var title := "PAUSA" if not cheat_pg else "TRAPAÇAS"
+	var tcol := GOLD if not cheat_pg else Color("ff8fe0")
+	var tsz := 54 if not cheat_pg else 40
+	var ty := first.position.y - (40.0 if not cheat_pg else 30.0)
+	c.draw_string_outline(Art.font(), Vector2(panel.position.x, ty), title, HORIZONTAL_ALIGNMENT_CENTER, panel.size.x, tsz, 10,
+		Color(0.04, 0.07, 0.14))
+	c.draw_string(Art.font(), Vector2(panel.position.x, ty), title, HORIZONTAL_ALIGNMENT_CENTER, panel.size.x, tsz, tcol)
+	var fsz := 26 if not cheat_pg else 19
+	for i in items_l.size():
+		var it: Dictionary = items_l[i]
+		var r := _pause_rect(i)
+		var sel := i == pause_sel
+		var id := String(it["id"])
+		var txt := String(it["text"])
+		if id == "music":
+			txt = "MÚSICA:  < %d%% >" % (Sfx.music_lvl * 10)
+		elif id == "sfx":
+			txt = "EFEITOS:  < %d%% >" % (Sfx.sfx_lvl * 10)
+		var on := id.begins_with("c_") and bool(cheats.get(id.substr(2), false))
+		var fill := GOLD if sel else Color(0.1, 0.16, 0.3, 0.95)
+		if not sel and (id == "quit"):
+			fill = Color(0.35, 0.1, 0.14, 0.95)
+		elif not sel and id == "cheats":
+			fill = Color(0.32, 0.12, 0.34, 0.95)
+		elif not sel and on:
+			fill = Color(0.16, 0.38, 0.22, 0.95)   # trapaça ligada: verde
+		Art.rrect(c, r, r.size.y * 0.5, fill, Color.WHITE if sel else Color(1, 1, 1, 0.2), 2.0)
+		c.draw_string(Art.font(), r.position + Vector2(0, r.size.y * 0.5 + fsz * 0.36), txt, HORIZONTAL_ALIGNMENT_CENTER,
+			r.size.x, fsz, Color("14233f") if sel else Color.WHITE)
+		if sel:
+			var wob := sin(anim_t * 6.0) * 4.0
+			Art.hand(c, Vector2(r.position.x - 22.0 + wob, r.get_center().y), 12.0, GOLD, Color("14233f"))
+	var help := "Esq/Dir: volume   |   Start, B ou Esc: voltar ao jogo"
+	if cheat_pg:
+		help = "A/Xis: usar ou ligar   |   B: voltar   |   Trapaça não conta para conquistas"
+	c.draw_string(Art.font(), Vector2(panel.position.x, last.end.y + 26.0), help, HORIZONTAL_ALIGNMENT_CENTER,
+		panel.size.x, 15, Color(1, 1, 1, 0.75))
+
+
+func _pause_click(pos: Vector2, btn: int) -> void:
+	if btn == MOUSE_BUTTON_RIGHT:
+		Sfx.play("menu_voltar")
+		if pause_page == 1:
+			pause_page = 0
+			pause_sel = _pause_items().size() - 2
+		else:
+			_close_pause()
+		return
+	var items_l := _pause_items()
+	for i in items_l.size():
+		var r := _pause_rect(i)
+		if not r.has_point(pos):
+			continue
+		pause_sel = i
+		var id := String(items_l[i]["id"])
+		if id == "music" or id == "sfx":
+			if btn == MOUSE_BUTTON_WHEEL_UP:
+				_pause_adjust(id, 1)
+			elif btn == MOUSE_BUTTON_WHEEL_DOWN:
+				_pause_adjust(id, -1)
+			elif btn == MOUSE_BUTTON_LEFT:
+				_pause_adjust(id, -1 if pos.x < r.get_center().x else 1)   # metade esquerda diminui, direita aumenta
+		elif btn == MOUSE_BUTTON_LEFT:
+			_pause_press(id)
+		return
+
+
+# ---------------------------------------------------------------- trapaças
+
+func _reset_cheats() -> void:
+	cheats.clear()
+	cheats_used = false
+	Engine.time_scale = 1.0
+
+
+func _cheat(id: String) -> void:
+	cheats_used = true
+	var cd: Dictionary = {}
+	for c in CHEATS:
+		if String(c["id"]) == id:
+			cd = c
+	if cd.is_empty():
+		return
+	Sfx.play("buff")
+	if bool(cd["toggle"]):
+		cheats[id] = not bool(cheats.get(id, false))
+		var on: bool = cheats[id]
+		match id:
+			"slow":
+				Engine.time_scale = 0.5 if on else 1.0
+			"jump":
+				for f in fighters:
+					f.jump_mult = (1.7 if on else (1.1 if rule == "frantic" else 1.0))
+			"grav":
+				if not on:
+					Art.grav = 0.42 if (mut_cur >= 0 and String(MUTATORS[mut_cur]["id"]) == "lowgrav") else 1.0
+			"god":
+				if not on:
+					for f in fighters:
+						f.god_mode = false
+		feed.append({"text": "Trapaça: %s %s" % [String(cd["text"]).to_lower(), "ligada" if on else "desligada"],
+			"color": Color("ff6bd5"), "t": 0.0})
+		return
+	match id:
+		"items":
+			for k in 3:
+				items._spawn()
+		"dmg999":
+			for f in fighters:
+				if not f.eliminated:
+					f.percent = 999.0
+		"dmg0":
+			for f in fighters:
+				f.percent = 0.0
+		"life":
+			for f in fighters:
+				if not f.eliminated:
+					f.stocks += 1
+		"ko_cpu":
+			for f in fighters:
+				if f.ai != null and not f.eliminated and f.respawn_t <= 0.0:
+					f._ko()
+	feed.append({"text": "Trapaça: %s" % String(cd["text"]).to_lower(), "color": Color("ff6bd5"), "t": 0.0})
+
+
+## Trapaças que ficam ligadas: reaplicadas a cada quadro da luta.
+func _cheat_tick() -> void:
+	if cheats.is_empty():
+		return
+	for f in fighters:
+		if cheats.get("mana", false):
+			f.mana = f.max_mana
+		if cheats.get("ult", false):
+			f.ult_cd = 0.0
+		if cheats.get("god", false):
+			f.god_mode = f.ai == null and f.prefix != ""
+	if cheats.get("grav", false):
+		Art.grav = 0.45
